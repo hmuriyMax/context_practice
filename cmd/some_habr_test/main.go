@@ -15,7 +15,7 @@ func sleepRandom(fromFunction string, ch chan int) {
 	}()
 
 	// Симулируем медленную задачу:
-	// «заснем» на рандомное время в хъмс
+	// «заснем» на рандомное время в мс [100, 200)
 	seed := time.Now().UnixNano()
 	r := rand.New(rand.NewSource(seed))
 	randomNumber := r.Intn(100)
@@ -58,8 +58,8 @@ func sleepRandomContext(ctx context.Context, ch chan bool) {
 		// doWorkContext или main вызывает cancelFunction
 		// Высвобождаем ресурсы, которые больше не нужны из-за прерывания работы
 		// Посылаем сигнал всем горутинам, которые должны завершиться (используя каналы)
-		// Обычно вы посылаете что-нибудь в канал,
-		// ждете выхода из горутины, затем возвращаетесь
+		// Обычно посылают что-нибудь в канал,
+		// ждут выхода из горутины, затем возвращаетесь
 		// Или используете группы ожидания вместо каналов для синхронизации
 		fmt.Println("sleepRandomContext: Time to return")
 
@@ -110,8 +110,7 @@ func main() {
 	// Производим контекст с отменой
 	ctxWithCancel, cancelFunction := context.WithCancel(ctx)
 
-	// Отложенная отмена высвобождает все ресурсы
-	// для этого и производных от него контекстов
+	// Отложенная функция вызывает функцию отмены
 	defer func() {
 		fmt.Println("Main Defer: canceling context")
 		cancelFunction()
@@ -121,8 +120,8 @@ func main() {
 	// Если это происходит, все производные от него контексты должны завершиться
 	go func() {
 		sleepRandom("Main", nil)
-		cancelFunction()
 		fmt.Println("Main Sleep complete. canceling context")
+		cancelFunction()
 	}()
 
 	// Выполнение работы
