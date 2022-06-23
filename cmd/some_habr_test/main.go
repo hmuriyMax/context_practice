@@ -2,53 +2,48 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"math/rand"
+	"log"
 	"time"
 )
 
-// Медленная функция
-func sleepRandom(fromFunction string, ch chan int) {
-	// Отложенная функция очистки
+const (
+	TCancel  = 4
+	TContext = 2
+	TWork    = 5
+)
+
+func sleepFor(fromFunction string, dur int, res chan bool) {
 	defer func() {
-		fmt.Println(fromFunction, "sleepRandom complete")
+		log.Printf("%s: sleepFor() complete\n", fromFunction)
 	}()
 
-	// Симулируем медленную задачу:
-	// «заснем» на рандомное время в мс [100, 200)
-	seed := time.Now().UnixNano()
-	r := rand.New(rand.NewSource(seed))
-	randomNumber := r.Intn(100)
-	sleeptime := randomNumber + 100
+	log.Printf("%s: started sleep for %ds\n", fromFunction, dur)
+	time.Sleep(time.Duration(dur) * time.Second)
+	log.Printf("%s: sleep finished arter %ds\n", fromFunction, dur)
 
-	fmt.Println(fromFunction, "Starting sleep for", sleeptime, "ms")
-	time.Sleep(time.Duration(sleeptime) * time.Millisecond)
-	fmt.Println(fromFunction, "Waking up, slept for ", sleeptime, "ms")
-
-	// Напишем в канал, если он был передан
-	if ch != nil {
-		ch <- sleeptime
+	if res != nil {
+		res <- true
 	}
 }
 
 // Функция, выполняющая медленную работу с использованием контекста
 // Заметьте, что контекст - это первый аргумент
-func sleepRandomContext(ctx context.Context, ch chan bool) {
+func doWorkContext2(ctx context.Context, ch chan bool) {
 
 	// Выполнение (прим. пер.: отложенное выполнение) действий по очистке
 	// Созданных контекстов больше нет
 	// Следовательно, отмена не требуется
 	defer func() {
-		fmt.Println("sleepRandomContext complete")
+		log.Println("doWorkContext2() complete")
 		ch <- true
 	}()
 
 	// Создаем канал
-	sleeptimeChan := make(chan int)
+	sleepFinished := make(chan bool)
 
 	// Запускаем выполнение медленной задачи в горутине
 	// Передаем канал для коммуникаций
-	go sleepRandom("sleepRandomContext", sleeptimeChan)
+	go sleepFor("doWorkContext2", TWork, sleepFinished)
 
 	// Используем select для выхода по истечении времени жизни контекста
 	select {
@@ -56,32 +51,23 @@ func sleepRandomContext(ctx context.Context, ch chan bool) {
 		// Если контекст отменен, выбирается этот случай
 		// Это случается, если заканчивается таймаут doWorkContext или
 		// doWorkContext или main вызывает cancelFunction
-		// Высвобождаем ресурсы, которые больше не нужны из-за прерывания работы
-		// Посылаем сигнал всем горутинам, которые должны завершиться (используя каналы)
-		// Обычно посылают что-нибудь в канал,
-		// ждут выхода из горутины, затем возвращаетесь
-		// Или используете группы ожидания вместо каналов для синхронизации
-		fmt.Println("sleepRandomContext: Time to return")
+		log.Println("doWorkContext2: cancel-func call detected")
 
-	case sleeptime := <-sleeptimeChan:
+	case <-sleepFinished:
 		// Этот вариант выбирается, когда работа завершается до отмены контекста
-		fmt.Println("Slept for ", sleeptime, "ms")
+		log.Println("doWorkContext2: sleep finished successfully")
 	}
 }
 
 // Вспомогательная функция, которая в реальности может использоваться для разных целей
 // Здесь она просто вызывает одну функцию
-// В данном случае, она могла бы быть в main
-func doWorkContext(ctx context.Context) {
-
-	// От контекста с функцией отмены создаём производный контекст с тайм-аутом
-	// Таймаут 150 мс
-	// Все контексты, производные от этого, завершатся через 150 мс
-	ctxWithTimeout, cancelFunction := context.WithTimeout(ctx, time.Duration(150)*time.Millisecond)
+func doWorkContext1(ctx context.Context) {
+	// От контекста с функцией отмены создаём производный контекст с таймаутом 2 секунды
+	ctxWithTimeout, cancelFunction := context.WithTimeout(ctx, TContext*time.Second)
 
 	// Функция отмены для освобождения ресурсов после завершения функции
 	defer func() {
-		fmt.Println("doWorkContext complete")
+		log.Println("doWorkContext1() complete")
 		cancelFunction()
 	}()
 
@@ -89,18 +75,18 @@ func doWorkContext(ctx context.Context) {
 	// Можно также использовать группы ожидания для этого конкретного случая,
 	// поскольку мы не используем возвращаемое значение, отправленное в канал
 	ch := make(chan bool)
-	go sleepRandomContext(ctxWithTimeout, ch)
+	go doWorkContext2(ctxWithTimeout, ch)
 
 	// Используем select для выхода при истечении контекста
 	select {
 	case <-ctx.Done():
 		// Этот случай выбирается, когда переданный в качестве аргумента контекст уведомляет о завершении работы
 		// В данном примере это произойдёт, когда в main будет вызвана cancelFunction
-		fmt.Println("doWorkContext: Time to return")
+		log.Println("doWorkContext1: cancel-func call detected")
 
 	case <-ch:
 		// Этот вариант выбирается, когда работа завершается до отмены контекста
-		fmt.Println("sleepRandomContext returned")
+		log.Println("doWorkContext1: dWC2 returned successfully")
 	}
 }
 
@@ -112,18 +98,17 @@ func main() {
 
 	// Отложенная функция вызывает функцию отмены
 	defer func() {
-		fmt.Println("Main Defer: canceling context")
+		log.Println("Main Defer: canceling context")
 		cancelFunction()
 	}()
 
-	// Отмена контекста после случайного тайм-аута
+	// Отмена контекста после TCancel секунд.
 	// Если это происходит, все производные от него контексты должны завершиться
 	go func() {
-		sleepRandom("Main", nil)
-		fmt.Println("Main Sleep complete. canceling context")
+		sleepFor("Main", TCancel, nil)
 		cancelFunction()
 	}()
 
 	// Выполнение работы
-	doWorkContext(ctxWithCancel)
+	doWorkContext1(ctxWithCancel)
 }
